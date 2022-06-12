@@ -623,6 +623,7 @@ static void destroy_sched_domains(struct sched_domain *sd)
 DEFINE_PER_CPU(struct sched_domain __rcu *, sd_llc);
 DEFINE_PER_CPU(int, sd_llc_size);
 DEFINE_PER_CPU(int, sd_llc_id);
+DEFINE_PER_CPU_SHARED_ALIGNED(int, sd_llc_idle_scan);
 DEFINE_PER_CPU(struct sched_domain_shared __rcu *, sd_llc_shared);
 DEFINE_PER_CPU(struct sched_domain __rcu *, sd_numa);
 DEFINE_PER_CPU(struct sched_domain __rcu *, sd_asym_packing);
@@ -643,9 +644,12 @@ static void update_top_cache_domain(int cpu)
 		sds = sd->shared;
 	}
 
-	rcu_assign_pointer(per_cpu(sd_llc, cpu), sd);
+	if (cpu == id)
+		WRITE_ONCE(per_cpu(sd_llc_idle_scan, id), size);
+
 	per_cpu(sd_llc_size, cpu) = size;
 	per_cpu(sd_llc_id, cpu) = id;
+	rcu_assign_pointer(per_cpu(sd_llc, cpu), sd);
 	rcu_assign_pointer(per_cpu(sd_llc_shared, cpu), sds);
 
 	sd = lowest_flag_domain(cpu, SD_NUMA);

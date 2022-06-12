@@ -6370,56 +6370,36 @@ static inline int select_idle_smt(struct task_struct *p, struct sched_domain *sd
 #endif /* CONFIG_SCHED_SMT */
 
 /*
- * Scan the LLC domain for idle CPUs; this is dynamically regulated by
- * comparing the average scan cost (tracked in sd->avg_scan_cost) against the
- * average idle time for this rq (as found in rq->avg_idle).
+ * Scan the LLC domain for idle CPUs; this is dynamically regulated by the
+ * utilization of the LLC domain (tracked per-LLC in sd_llc_idle_scan).
  */
 static int select_idle_cpu(struct task_struct *p, struct sched_domain *sd, int target)
 {
 	struct cpumask *cpus = this_cpu_cpumask_var_ptr(select_idle_mask);
-	struct sched_domain *this_sd;
-	u64 avg_cost, avg_idle;
-	u64 time;
-	int this = smp_processor_id();
-	int cpu, nr = INT_MAX;
+	int cpu, idle_cpu = -1, nr = INT_MAX;
 
-	this_sd = rcu_dereference(*this_cpu_ptr(&sd_llc));
-	if (!this_sd)
-		return -1;
+	if (sched_feat(SIS_UTIL)) {
+		int id = per_cpu(sd_llc_id, target);
 
-	/*
-	 * Due to large variance we need a large fuzz factor; hackbench in
-	 * particularly is sensitive here.
-	 */
-	avg_idle = this_rq()->avg_idle / 512;
-	avg_cost = this_sd->avg_scan_cost + 1;
-
-	if (sched_feat(SIS_AVG_CPU) && avg_idle < avg_cost)
-		return -1;
-
-	if (sched_feat(SIS_PROP)) {
-		u64 span_avg = sd->span_weight * avg_idle;
-		if (span_avg > 4*avg_cost)
-			nr = div_u64(span_avg, avg_cost);
-		else
-			nr = 4;
+		/* because --nr <= 0 is the condition to stop scan */
+		nr = READ_ONCE(per_cpu(sd_llc_idle_scan, id)) + 1;
+		/* overloaded LLC is unlikely to have idle cpu/core */
+		if (nr <= 1)
+			return -1;
 	}
-
-	time = cpu_clock(this);
 
 	cpumask_and(cpus, sched_domain_span(sd), p->cpus_ptr);
 
-	for_each_cpu_wrap(cpu, cpus, target) {
-		if (!--nr)
+	for_each_cpu_wrap(cpu, cpus, target + 1) {
+		if (--nr <= 0)
 			return -1;
-		if (available_idle_cpu(cpu) || sched_idle_cpu(cpu))
+		if (available_idle_cpu(cpu) || sched_idle_cpu(cpu)) {
+			idle_cpu = cpu;
 			break;
+		}
 	}
 
-	time = cpu_clock(this) - time;
-	update_avg(&this_sd->avg_scan_cost, time);
-
-	return cpu;
+	return idle_cpu;
 }
 
 /*
@@ -9242,6 +9222,74 @@ find_idlest_group(struct sched_domain *sd, struct task_struct *p, int this_cpu)
 	return idlest;
 }
 
+static void update_idle_cpu_scan(struct lb_env *env,
+				 unsigned long sum_util)
+{
+	int llc_weight, id;
+	u64 pct, x, y, tmp;
+
+	/*
+	 * Update the number of CPUs to scan in LLC domain, which could
+	 * be used as a hint in select_idle_cpu(). The update of shared
+	 * per-LLC state could be expensive because it bounces across a
+	 * shared cache line. So the write of this hint only occurs during
+	 * periodic load balancing, rather than CPU_NEWLY_IDLE, because the
+	 * latter can fire way more frequently than the former.
+	 */
+	if (!sched_feat(SIS_UTIL) || env->idle == CPU_NEWLY_IDLE)
+		return;
+
+	llc_weight = per_cpu(sd_llc_size, env->dst_cpu);
+	if (env->sd->span_weight != llc_weight || llc_weight <= 1)
+		return;
+
+	id = per_cpu(sd_llc_id, env->dst_cpu);
+
+	/*
+	 * The number of CPUs to search drops as sum_util increases, when
+	 * sum_util hits 85% or above, the scan stops.
+	 * The reason to choose 85% as the threshold is because this is the
+	 * imbalance_pct(117) when a LLC sched group is overloaded.
+	 *
+	 * let y = SCHED_CAPACITY_SCALE - p * x^2                       [1]
+	 * and y'= y / SCHED_CAPACITY_SCALE
+	 *
+	 * x is the ratio of sum_util compared to the CPU capacity:
+	 * x = sum_util / (llc_weight * SCHED_CAPACITY_SCALE)
+	 * y' is the ratio of CPUs to be scanned in the LLC domain,
+	 * and the number of CPUs to scan is calculated by:
+	 *
+	 * nr_scan = llc_weight * y'                                    [2]
+	 *
+	 * When x hits the threshold of overloaded, AKA, when
+	 * x = 100 / pct, y drops to 0. According to [1],
+	 * p should be SCHED_CAPACITY_SCALE * pct^2 / 10000
+	 *
+	 * Scale x by SCHED_CAPACITY_SCALE:
+	 * x' = sum_util / llc_weight;                                  [3]
+	 *
+	 * and finally [1] becomes:
+	 * y = SCHED_CAPACITY_SCALE -
+	 *     x'^2 * pct^2 / (10000 * SCHED_CAPACITY_SCALE)            [4]
+	 *
+	 */
+	/* equation [3] */
+	x = div_u64(sum_util, (u32)llc_weight);
+
+	/* equation [4] */
+	pct = env->sd->imbalance_pct;
+	tmp = x * x * pct * pct;
+	tmp = div_u64(tmp, (u32)(10000 * SCHED_CAPACITY_SCALE));
+	tmp = min_t(u64, tmp, SCHED_CAPACITY_SCALE);
+	y = SCHED_CAPACITY_SCALE - tmp;
+
+	/* equation [2] */
+	y *= llc_weight;
+	y = div_u64(y, (u32)SCHED_CAPACITY_SCALE);
+	if ((int)y != READ_ONCE(per_cpu(sd_llc_idle_scan, id)))
+		WRITE_ONCE(per_cpu(sd_llc_idle_scan, id), (int)y);
+}
+
 /**
  * update_sd_lb_stats - Update sched_domain's statistics for load balancing.
  * @env: The load balancing environment.
@@ -9254,6 +9302,7 @@ static inline void update_sd_lb_stats(struct lb_env *env, struct sd_lb_stats *sd
 	struct sched_group *sg = env->sd->groups;
 	struct sg_lb_stats *local = &sds->local_stat;
 	struct sg_lb_stats tmp_sgs;
+	unsigned long sum_util = 0;
 	int sg_status = 0;
 
 	do {
@@ -9286,6 +9335,7 @@ next_group:
 		sds->total_load += sgs->group_load;
 		sds->total_capacity += sgs->group_capacity;
 
+		sum_util += sgs->group_util;
 		sg = sg->next;
 	} while (sg != env->sd->groups);
 
@@ -9311,6 +9361,8 @@ next_group:
 		WRITE_ONCE(rd->overutilized, SG_OVERUTILIZED);
 		trace_sched_overutilized_tp(rd, SG_OVERUTILIZED);
 	}
+
+	update_idle_cpu_scan(env, sum_util);
 }
 
 static inline long adjust_numa_imbalance(int imbalance, int nr_running)
