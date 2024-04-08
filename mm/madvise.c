@@ -621,6 +621,7 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 	struct page *page;
 	int nr_swap = 0;
 	unsigned long next;
+	int nr, max_nr;
 
 	next = pmd_addr_end(addr, end);
 	if (pmd_trans_huge(*pmd))
@@ -634,7 +635,8 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 	orig_pte = pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
 	flush_tlb_batched_pending(mm);
 	arch_enter_lazy_mmu_mode();
-	for (; addr != end; pte++, addr += PAGE_SIZE) {
+	for (; addr != end; pte += nr, addr += PAGE_SIZE * nr) {
+		nr = 1;
 		ptent = *pte;
 
 		if (pte_none(ptent))
@@ -650,9 +652,11 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 			entry = pte_to_swp_entry(ptent);
 			if (non_swap_entry(entry))
 				continue;
-			nr_swap--;
-			free_swap_and_cache(entry);
-			pte_clear_not_present_full(mm, addr, pte, tlb->fullmm);
+			max_nr = (end - addr) / PAGE_SIZE;
+			nr = swap_pte_batch(pte, max_nr, ptent);
+			nr_swap -= nr;
+			free_swap_and_cache_nr(entry, nr);
+			clear_not_present_full_ptes(mm, addr, pte, nr, tlb->fullmm);
 			continue;
 		}
 

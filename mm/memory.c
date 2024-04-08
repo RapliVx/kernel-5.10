@@ -1292,6 +1292,7 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 	pte_t *start_pte;
 	pte_t *pte;
 	swp_entry_t entry;
+	int nr, max_nr;
 
 	tlb_change_page_size(tlb, PAGE_SIZE);
 again:
@@ -1302,6 +1303,7 @@ again:
 	arch_enter_lazy_mmu_mode();
 	do {
 		pte_t ptent = *pte;
+		nr = 1;
 		if (pte_none(ptent))
 			continue;
 
@@ -1373,10 +1375,12 @@ again:
 		}
 
 		if (!non_swap_entry(entry)) {
-			/* Genuine swap entry, hence a private anon page */
+			/* Genuine swap entries, hence private anon pages */
+			max_nr = (end - addr) / PAGE_SIZE;
+			nr = swap_pte_batch(pte, max_nr, ptent);
 			if (!should_zap_cows(details))
 				continue;
-			rss[MM_SWAPENTS]--;
+			rss[MM_SWAPENTS] -= nr;
 		} else if (is_migration_entry(entry)) {
 			struct page *page;
 
@@ -1386,10 +1390,9 @@ again:
 				continue;
 			rss[mm_counter(page)]--;
 		}
-		if (unlikely(!free_swap_and_cache(entry)))
-			print_bad_pte(vma, addr, ptent, NULL);
-		pte_clear_not_present_full(mm, addr, pte, tlb->fullmm);
-	} while (pte++, addr += PAGE_SIZE, addr != end);
+		free_swap_and_cache_nr(entry, nr);
+		clear_not_present_full_ptes(mm, addr, pte, nr, tlb->fullmm);
+	} while (pte += nr, addr += PAGE_SIZE * nr, addr != end);
 
 	add_mm_rss_vec(mm, rss);
 	arch_leave_lazy_mmu_mode();
