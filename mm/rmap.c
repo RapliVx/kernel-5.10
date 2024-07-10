@@ -72,6 +72,7 @@
 #include <linux/page_idle.h>
 #include <linux/memremap.h>
 #include <linux/userfaultfd_k.h>
+#include <linux/oom.h>
 
 #include <asm/tlbflush.h>
 
@@ -799,6 +800,20 @@ static bool page_referenced_one(struct page *page, struct vm_area_struct *vma,
 			page_vma_mapped_walk_done(&pvmw);
 			pra->vm_flags |= VM_LOCKED;
 			return false; /* To break the loop */
+		}
+
+		/*
+		 * Skip the non-shared swapbacked page mapped solely by
+		 * the exiting or OOM-reaped process. This avoids redundant
+		 * swap-out followed by an immediate unmap.
+		 */
+		if ((!atomic_read(&vma->vm_mm->mm_users) ||
+		    check_stable_address_space(vma->vm_mm)) &&
+		    PageAnon(page) && PageSwapBacked(page) &&
+		    total_mapcount(page) == 1) {
+			pra->referenced = -1;
+			page_vma_mapped_walk_done(&pvmw);
+			return false;
 		}
 
 		if (pvmw.pte) {
