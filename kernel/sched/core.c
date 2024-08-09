@@ -4675,7 +4675,17 @@ restart:
  *
  * WARNING: must be called with preemption disabled!
  */
-static void __sched notrace __schedule(bool preempt)
+/*
+ * Constants for the sched_mode argument of __schedule().
+ *
+ * The mode argument allows RT enabled kernels to differentiate a
+ * preemption from blocking on a 'sleeping' spin/rwlock.
+ */
+#define SM_IDLE		(-1)
+#define SM_NONE		0
+#define SM_PREEMPT	1
+
+static void __sched notrace __schedule(int sched_mode)
 {
 	struct task_struct *prev, *next;
 	unsigned long *switch_count;
@@ -4683,6 +4693,7 @@ static void __sched notrace __schedule(bool preempt)
 	struct rq_flags rf;
 	struct rq *rq;
 	int cpu;
+	bool preempt = sched_mode > SM_NONE;
 
 	cpu = smp_processor_id();
 	rq = cpu_rq(cpu);
@@ -4728,7 +4739,12 @@ static void __sched notrace __schedule(bool preempt)
 	 *  - ptrace_{,un}freeze_traced() can change ->state underneath us.
 	 */
 	prev_state = prev->state;
-	if (!preempt && prev_state) {
+	if (sched_mode == SM_IDLE) {
+		if (!rq->nr_running) {
+			next = prev;
+			goto picked;
+		}
+	} else if (!preempt && prev_state) {
 		if (signal_pending_state(prev_state, prev)) {
 			prev->state = TASK_RUNNING;
 		} else {
@@ -4762,6 +4778,7 @@ static void __sched notrace __schedule(bool preempt)
 	}
 
 	next = pick_next_task(rq, prev, &rf);
+picked:
 	clear_tsk_need_resched(prev);
 	clear_preempt_need_resched();
 
@@ -4811,7 +4828,7 @@ void __noreturn do_task_dead(void)
 	/* Tell freezer to ignore us: */
 	current->flags |= PF_NOFREEZE;
 
-	__schedule(false);
+	__schedule(SM_NONE);
 	BUG();
 
 	/* Avoid "noreturn function does return" - but don't continue if BUG() is a NOP: */
@@ -4872,7 +4889,7 @@ asmlinkage __visible void __sched schedule(void)
 	sched_submit_work(tsk);
 	do {
 		preempt_disable();
-		__schedule(false);
+		__schedule(SM_NONE);
 		sched_preempt_enable_no_resched();
 	} while (need_resched());
 	sched_update_worker(tsk);
@@ -4900,7 +4917,7 @@ void __sched schedule_idle(void)
 	 */
 	WARN_ON_ONCE(current->state);
 	do {
-		__schedule(false);
+		__schedule(SM_IDLE);
 	} while (need_resched());
 }
 
@@ -4953,7 +4970,7 @@ static void __sched notrace preempt_schedule_common(void)
 		 */
 		preempt_disable_notrace();
 		preempt_latency_start(1);
-		__schedule(true);
+		__schedule(SM_PREEMPT);
 		preempt_latency_stop(1);
 		preempt_enable_no_resched_notrace();
 
@@ -5026,7 +5043,7 @@ asmlinkage __visible void __sched notrace preempt_schedule_notrace(void)
 		 * an infinite recursion.
 		 */
 		prev_ctx = exception_enter();
-		__schedule(true);
+		__schedule(SM_PREEMPT);
 		exception_exit(prev_ctx);
 
 		preempt_latency_stop(1);
@@ -5055,7 +5072,7 @@ asmlinkage __visible void __sched preempt_schedule_irq(void)
 	do {
 		preempt_disable();
 		local_irq_enable();
-		__schedule(true);
+		__schedule(SM_PREEMPT);
 		local_irq_disable();
 		sched_preempt_enable_no_resched();
 	} while (need_resched());
