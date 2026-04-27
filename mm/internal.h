@@ -79,6 +79,15 @@ void unmap_page_range(struct mmu_gather *tlb,
 
 void do_page_cache_ra(struct readahead_control *, unsigned long nr_to_read,
 		unsigned long lookahead_size);
+void do_page_cache_ra_limited(struct readahead_control *,
+		unsigned long nr_to_read, unsigned long lookahead_size,
+		pgoff_t max_index);
+void page_cache_sync_ra_limited(struct readahead_control *,
+		struct file_ra_state *, unsigned long req_count,
+		pgoff_t max_index);
+void page_cache_async_ra_limited(struct readahead_control *,
+		struct file_ra_state *, struct page *, unsigned long req_count,
+		pgoff_t max_index);
 void force_page_cache_ra(struct readahead_control *, struct file_ra_state *,
 		unsigned long nr);
 static inline void force_page_cache_readahead(struct address_space *mapping,

@@ -256,8 +256,9 @@ EXPORT_SYMBOL_GPL(page_cache_ra_unbounded);
  * behaviour which would occur if page allocations are causing VM writeback.
  * We really don't want to intermingle reads and writes like that.
  */
-void do_page_cache_ra(struct readahead_control *ractl,
-		unsigned long nr_to_read, unsigned long lookahead_size)
+void do_page_cache_ra_limited(struct readahead_control *ractl,
+		unsigned long nr_to_read, unsigned long lookahead_size,
+		pgoff_t max_index)
 {
 	struct inode *inode = ractl->mapping->host;
 	unsigned long index = readahead_index(ractl);
@@ -268,6 +269,8 @@ void do_page_cache_ra(struct readahead_control *ractl,
 		return;
 
 	end_index = (isize - 1) >> PAGE_SHIFT;
+	if (end_index > max_index)
+		end_index = max_index;
 	if (index > end_index)
 		return;
 	/* Don't read past the page containing the last byte of the file */
@@ -277,12 +280,19 @@ void do_page_cache_ra(struct readahead_control *ractl,
 	page_cache_ra_unbounded(ractl, nr_to_read, lookahead_size);
 }
 
+void do_page_cache_ra(struct readahead_control *ractl,
+		unsigned long nr_to_read, unsigned long lookahead_size)
+{
+	do_page_cache_ra_limited(ractl, nr_to_read, lookahead_size, ULONG_MAX);
+}
+
 /*
  * Chunk the readahead into 2 megabyte units, so that we don't pin too much
  * memory at once.
  */
-void force_page_cache_ra(struct readahead_control *ractl,
-		struct file_ra_state *ra, unsigned long nr_to_read)
+static void force_page_cache_ra_limited(struct readahead_control *ractl,
+		struct file_ra_state *ra, unsigned long nr_to_read,
+		pgoff_t max_index)
 {
 	struct address_space *mapping = ractl->mapping;
 	struct backing_dev_info *bdi = inode_to_bdi(mapping->host);
@@ -305,11 +315,17 @@ void force_page_cache_ra(struct readahead_control *ractl,
 		if (this_chunk > nr_to_read)
 			this_chunk = nr_to_read;
 		ractl->_index = index;
-		do_page_cache_ra(ractl, this_chunk, 0);
+		do_page_cache_ra_limited(ractl, this_chunk, 0, max_index);
 
 		index += this_chunk;
 		nr_to_read -= this_chunk;
 	}
+}
+
+void force_page_cache_ra(struct readahead_control *ractl,
+		struct file_ra_state *ra, unsigned long nr_to_read)
+{
+	force_page_cache_ra_limited(ractl, ra, nr_to_read, ULONG_MAX);
 }
 
 /*
@@ -444,7 +460,7 @@ static int try_context_readahead(struct address_space *mapping,
  */
 static void ondemand_readahead(struct readahead_control *ractl,
 		struct file_ra_state *ra, bool hit_readahead_marker,
-		unsigned long req_size)
+		unsigned long req_size, pgoff_t max_index)
 {
 	struct backing_dev_info *bdi = inode_to_bdi(ractl->mapping->host);
 	unsigned long max_pages = ra->ra_pages;
@@ -531,7 +547,7 @@ static void ondemand_readahead(struct readahead_control *ractl,
 	 * standalone, small random read
 	 * Read as is, and do not pollute the readahead state.
 	 */
-	do_page_cache_ra(ractl, req_size, 0);
+	do_page_cache_ra_limited(ractl, req_size, 0, max_index);
 	return;
 
 initial_readahead:
@@ -558,11 +574,12 @@ readit:
 	}
 
 	ractl->_index = ra->start;
-	do_page_cache_ra(ractl, ra->size, ra->async_size);
+	do_page_cache_ra_limited(ractl, ra->size, ra->async_size, max_index);
 }
 
-void page_cache_sync_ra(struct readahead_control *ractl,
-		struct file_ra_state *ra, unsigned long req_count)
+void page_cache_sync_ra_limited(struct readahead_control *ractl,
+		struct file_ra_state *ra, unsigned long req_count,
+		pgoff_t max_index)
 {
 	bool do_forced_ra = ractl->file && (ractl->file->f_mode & FMODE_RANDOM);
 
@@ -581,18 +598,24 @@ void page_cache_sync_ra(struct readahead_control *ractl,
 
 	/* be dumb */
 	if (do_forced_ra) {
-		force_page_cache_ra(ractl, ra, req_count);
+		force_page_cache_ra_limited(ractl, ra, req_count, max_index);
 		return;
 	}
 
 	/* do read-ahead */
-	ondemand_readahead(ractl, ra, false, req_count);
+	ondemand_readahead(ractl, ra, false, req_count, max_index);
+}
+
+void page_cache_sync_ra(struct readahead_control *ractl,
+		struct file_ra_state *ra, unsigned long req_count)
+{
+	page_cache_sync_ra_limited(ractl, ra, req_count, ULONG_MAX);
 }
 EXPORT_SYMBOL_GPL(page_cache_sync_ra);
 
-void page_cache_async_ra(struct readahead_control *ractl,
+void page_cache_async_ra_limited(struct readahead_control *ractl,
 		struct file_ra_state *ra, struct page *page,
-		unsigned long req_count)
+		unsigned long req_count, pgoff_t max_index)
 {
 	/* no read-ahead */
 	if (!ra->ra_pages)
@@ -616,7 +639,14 @@ void page_cache_async_ra(struct readahead_control *ractl,
 		return;
 
 	/* do read-ahead */
-	ondemand_readahead(ractl, ra, true, req_count);
+	ondemand_readahead(ractl, ra, true, req_count, max_index);
+}
+
+void page_cache_async_ra(struct readahead_control *ractl,
+		struct file_ra_state *ra, struct page *page,
+		unsigned long req_count)
+{
+	page_cache_async_ra_limited(ractl, ra, page, req_count, ULONG_MAX);
 }
 EXPORT_SYMBOL_GPL(page_cache_async_ra);
 

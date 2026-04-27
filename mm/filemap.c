@@ -2632,6 +2632,8 @@ static struct file *do_sync_mmap_readahead(struct vm_fault *vmf)
 	struct address_space *mapping = file->f_mapping;
 	DEFINE_READAHEAD(ractl, file, mapping, vmf->pgoff);
 	struct file *fpin = NULL;
+	pgoff_t min_index = vmf->vma->vm_pgoff;
+	pgoff_t max_index = min_index + vma_pages(vmf->vma) - 1;
 	unsigned int mmap_miss;
 
 	/* If we don't want any read-ahead, don't bother */
@@ -2642,7 +2644,7 @@ static struct file *do_sync_mmap_readahead(struct vm_fault *vmf)
 
 	if (vmf->vma->vm_flags & VM_SEQ_READ) {
 		fpin = maybe_unlock_mmap_for_io(vmf, fpin);
-		page_cache_sync_ra(&ractl, ra, ra->ra_pages);
+		page_cache_sync_ra_limited(&ractl, ra, ra->ra_pages, max_index);
 		return fpin;
 	}
 
@@ -2663,12 +2665,13 @@ static struct file *do_sync_mmap_readahead(struct vm_fault *vmf)
 	 */
 	fpin = maybe_unlock_mmap_for_io(vmf, fpin);
 	ra->start = max_t(long, 0, vmf->pgoff - ra->ra_pages / 2);
+	ra->start = max(ra->start, min_index);
 	ra->size = ra->ra_pages;
 	ra->async_size = ra->ra_pages / 4;
 	trace_android_vh_tune_mmap_readaround(ra->ra_pages, vmf->pgoff,
 			&ra->start, &ra->size, &ra->async_size);
 	ractl._index = ra->start;
-	do_page_cache_ra(&ractl, ra->size, ra->async_size);
+	do_page_cache_ra_limited(&ractl, ra->size, ra->async_size, max_index);
 	return fpin;
 }
 
@@ -2694,9 +2697,12 @@ static struct file *do_async_mmap_readahead(struct vm_fault *vmf,
 	if (mmap_miss)
 		WRITE_ONCE(ra->mmap_miss, --mmap_miss);
 	if (PageReadahead(page)) {
+		pgoff_t max_index = vmf->vma->vm_pgoff + vma_pages(vmf->vma) - 1;
+		DEFINE_READAHEAD(ractl, file, mapping, offset);
+
 		fpin = maybe_unlock_mmap_for_io(vmf, fpin);
-		page_cache_async_readahead(mapping, ra, file,
-					   page, offset, ra->ra_pages);
+		page_cache_async_ra_limited(&ractl, ra, page, ra->ra_pages,
+					    max_index);
 	}
 	return fpin;
 }
