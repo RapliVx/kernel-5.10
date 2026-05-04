@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/swap_cgroup.h>
+#include <linux/memcontrol.h>
 #include <linux/vmalloc.h>
 #include <linux/mm.h>
 
@@ -161,6 +162,20 @@ unsigned short swap_cgroup_record(swp_entry_t ent, unsigned short id,
  */
 unsigned short lookup_swap_cgroup_id(swp_entry_t ent)
 {
+	struct swap_cgroup_ctrl *ctrl;
+	unsigned int type;
+
+	if (mem_cgroup_disabled())
+		return 0;
+
+	type = swp_type(ent);
+	if (unlikely(type >= MAX_SWAPFILES))
+		return 0;
+
+	ctrl = &swap_cgroup_ctrl[type];
+	if (unlikely(!ctrl->map || swp_offset(ent) / SC_PER_PAGE >= ctrl->length))
+		return 0;
+
 	return lookup_swap_cgroup(ent, NULL)->id;
 }
 
