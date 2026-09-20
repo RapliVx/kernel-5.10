@@ -1961,8 +1961,20 @@ static int too_many_isolated(struct pglist_data *pgdat, int file,
  * Returns the number of pages moved to the given lruvec.
  */
 
+static inline int page_expected_ref_count(struct page *page)
+{
+	int refs = 1;
+	struct address_space *mapping = page_mapping(page);
+
+	if (mapping)
+		refs += thp_nr_pages(page) + page_has_private(page);
+
+	return refs;
+}
+
 static unsigned noinline_for_stack move_pages_to_lru(struct lruvec *lruvec,
-						     struct list_head *list)
+						     struct list_head *list,
+						     bool do_rotate)
 {
 	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
 	int nr_pages, nr_moved = 0;
@@ -1987,7 +1999,18 @@ static unsigned noinline_for_stack move_pages_to_lru(struct lruvec *lruvec,
 
 		nr_pages = thp_nr_pages(page);
 		update_lru_size(lruvec, lru, page_zonenum(page), nr_pages);
-		list_move(&page->lru, &lruvec->lists[lru]);
+		/*
+		 * Put clean, unreferenced and unpinned pages that may have
+		 * missed rotate_reclaimable_page() at the tail to avoid
+		 * cold/hot inversion.
+		 */
+		if (do_rotate && !PageActive(page) && !page_mapped(page) &&
+		    !PageDirty(page) && !PageWriteback(page) &&
+		    !PageReferenced(page) &&
+		    page_count(page) == page_expected_ref_count(page))
+			list_move_tail(&page->lru, &lruvec->lists[lru]);
+		else
+			list_move(&page->lru, &lruvec->lists[lru]);
 		trace_android_vh_add_page_to_lrulist(page, false, lru);
 
 		if (put_page_testzero(page)) {
@@ -2084,7 +2107,7 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 
 	spin_lock_irq(&pgdat->lru_lock);
 
-	move_pages_to_lru(lruvec, &page_list);
+	move_pages_to_lru(lruvec, &page_list, true);
 
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 	lru_note_cost(lruvec, file, stat.nr_pageout);
@@ -2220,8 +2243,8 @@ skip_page_referenced:
 	 */
 	spin_lock_irq(&pgdat->lru_lock);
 
-	nr_activate = move_pages_to_lru(lruvec, &l_active);
-	nr_deactivate = move_pages_to_lru(lruvec, &l_inactive);
+	nr_activate = move_pages_to_lru(lruvec, &l_active, false);
+	nr_deactivate = move_pages_to_lru(lruvec, &l_inactive, false);
 	/* Keep all free pages in l_active list */
 	list_splice(&l_inactive, &l_active);
 
