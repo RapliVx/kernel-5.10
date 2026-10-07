@@ -43,6 +43,8 @@ jobs:
             liblz4-tool \
             lz4 \
             python3 \
+            python3-lxml \
+            python3-rich \
             tar \
             unzip \
             zip
@@ -86,8 +88,12 @@ jobs:
           echo "Configuring gki_defconfig..."
           make -j$(nproc --all) "${BUILD_ARGS[@]}" gki_defconfig
 
-          echo "Compiling Image..."
-          make -j$(nproc --all) "${BUILD_ARGS[@]}" Image
+          echo "Compiling Image & modules..."
+          make -j$(nproc --all) "${BUILD_ARGS[@]}" Image modules
+
+      - name: "Verify KMI Symbols"
+        run: |
+          python3 KMI_function_symbols_test.py
 
       - name: "Package AnyKernel3"
         run: |
@@ -106,6 +112,7 @@ jobs:
         run: |
           mkdir -p release_assets
           cp out/arch/arm64/boot/Image release_assets/
+          [ -f out/vmlinux.symvers ] && cp out/vmlinux.symvers release_assets/
           [ -f "${ZIP_NAME}" ] && cp "${ZIP_NAME}" release_assets/
 
           cd release_assets
@@ -138,6 +145,7 @@ jobs:
             ### 📦 Included Files
             - `AnyKernel3-*.zip`: Flashable ZIP via Recovery (TWRP/OrangeFox) or KernelSU/APatch
             - `Image`: Uncompressed kernel binary
+            - `vmlinux.symvers`: Kernel symbol versions
             - `sha256sum.txt`: Checksums for file verification
           files: release_assets/*
         env:
