@@ -91,9 +91,7 @@ jobs:
 
       - name: "Package AnyKernel3"
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
-          sed -i 's/block=boot;/block=boot;\nis_slot_device=auto;/g' AnyKernel3/anykernel.sh
+          git clone --depth=1 --branch GKI-5.10 https://github.com/RapliVx/AnyKernel3.git AnyKernel3
           cp out/arch/arm64/boot/Image AnyKernel3/
           cd AnyKernel3
           rm -rf .git .github README.md *placeholder
