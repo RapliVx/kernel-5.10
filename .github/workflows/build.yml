@@ -2,12 +2,6 @@ name: "Kernel Build"
 
 on:
   workflow_dispatch:
-    inputs:
-      localVersion:
-        description: "Custom localversion (e.g., -Aetherium)"
-        required: false
-        type: string
-        default: "-Aetherium"
 
 jobs:
   build:
@@ -66,7 +60,6 @@ jobs:
 
       - name: "Build Kernel"
         run: |
-          LOCAL_VER="${{ github.event.inputs.localVersion || '-Aetherium' }}"
           BUILD_ARGS=(
             O=out
             ARCH=arm64
@@ -82,7 +75,6 @@ jobs:
             LLVM=1
             LLVM_IAS=1
             KCFLAGS="-D__ANDROID_COMMON_KERNEL__"
-            LOCALVERSION="$LOCAL_VER"
           )
 
           echo "Configuring gki_defconfig..."
