@@ -1,1 +1,155 @@
+name: "Kernel Build"
 
+on:
+  workflow_dispatch:
+    inputs:
+      localVersion:
+        description: "Custom localversion (e.g., -Aetherium)"
+        required: false
+        type: string
+        default: "-Aetherium"
+  push:
+    branches:
+      - aetherium
+      - main
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+
+jobs:
+  build:
+    name: "Build and Release Kernel"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: "Checkout Kernel Source"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: "Setup Build Environment"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            aria2 \
+            bc \
+            bison \
+            build-essential \
+            cpio \
+            curl \
+            device-tree-compiler \
+            dwarves \
+            flex \
+            gcc-aarch64-linux-gnu \
+            git \
+            kmod \
+            libelf-dev \
+            libssl-dev \
+            liblz4-tool \
+            lz4 \
+            python3 \
+            tar \
+            unzip \
+            zip
+
+      - name: "Download and Setup Clang Toolchain"
+        run: |
+          mkdir -p clang
+          CLANG_URL="https://github.com/topnotchfreaks/clang/releases/download/v1.0.0/clang-r547379.tar.gz"
+          echo "Downloading Clang r547379..."
+          aria2c -x 16 -s 16 -o clang.tar.gz "$CLANG_URL" || curl -fSL --retry 3 "$CLANG_URL" -o clang.tar.gz
+          tar -xzf clang.tar.gz -C clang
+          rm -f clang.tar.gz
+          echo "$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_PATH
+
+      - name: "Verify Compiler"
+        run: |
+          clang --version
+          ld.lld --version
+
+      - name: "Build Kernel"
+        run: |
+          LOCAL_VER="${{ github.event.inputs.localVersion || '-Aetherium' }}"
+          BUILD_ARGS=(
+            O=out
+            ARCH=arm64
+            CC=clang
+            LD=ld.lld
+            AR=llvm-ar
+            NM=llvm-nm
+            OBJCOPY=llvm-objcopy
+            OBJDUMP=llvm-objdump
+            READELF=llvm-readelf
+            STRIP=llvm-strip
+            CROSS_COMPILE=aarch64-linux-gnu-
+            LLVM=1
+            LLVM_IAS=1
+            KCFLAGS="-D__ANDROID_COMMON_KERNEL__"
+            LOCALVERSION="$LOCAL_VER"
+          )
+
+          echo "Configuring gki_defconfig..."
+          make -j$(nproc --all) "${BUILD_ARGS[@]}" gki_defconfig
+
+          echo "Compiling Image & Image.lz4..."
+          make -j$(nproc --all) "${BUILD_ARGS[@]}" Image Image.lz4
+
+      - name: "Package AnyKernel3"
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+          sed -i 's/block=boot;/block=boot;\nis_slot_device=auto;/g' AnyKernel3/anykernel.sh
+          cp out/arch/arm64/boot/Image AnyKernel3/
+          cd AnyKernel3
+          rm -rf .git .github README.md *placeholder
+          DATE=$(date +'%Y%m%d_%H%M')
+          ZIP_NAME="AnyKernel3-android12-5.10-${DATE}.zip"
+          zip -r9 "../$ZIP_NAME" ./*
+          cd ..
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: "Prepare Release Assets"
+        id: prepare_release
+        run: |
+          mkdir -p release_assets
+          cp out/arch/arm64/boot/Image release_assets/
+          [ -f out/arch/arm64/boot/Image.lz4 ] && cp out/arch/arm64/boot/Image.lz4 release_assets/
+          [ -f "${ZIP_NAME}" ] && cp "${ZIP_NAME}" release_assets/
+
+          cd release_assets
+          sha256sum * > sha256sum.txt
+          cd ..
+
+          KERNEL_VER=$(make kernelversion)
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          BUILD_DATE=$(date +'%Y-%m-%d')
+          TAG_NAME="${KERNEL_VER}-${BUILD_DATE}-${SHORT_SHA}"
+
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "KERNEL_VER=$KERNEL_VER" >> $GITHUB_OUTPUT
+          echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_OUTPUT
+
+      - name: "Create GitHub Release"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.prepare_release.outputs.TAG_NAME }}
+          name: "Kernel ${{ steps.prepare_release.outputs.KERNEL_VER }} (${{ steps.prepare_release.outputs.BUILD_DATE }})"
+          body: |
+            ### 🚀 Kernel Release Info
+            - **Kernel Version:** `${{ steps.prepare_release.outputs.KERNEL_VER }}`
+            - **Commit:** `${{ steps.prepare_release.outputs.SHORT_SHA }}`
+            - **Build Date:** `${{ steps.prepare_release.outputs.BUILD_DATE }}`
+            - **Compiler:** Clang r547379 (LLVM)
+            - **Branch:** `${{ github.ref_name }}`
+
+            ### 📦 Included Files
+            - `AnyKernel3-*.zip`: Flashable ZIP via Recovery (TWRP/OrangeFox) or KernelSU/APatch
+            - `Image`: Uncompressed kernel binary
+            - `Image.lz4`: LZ4 compressed kernel binary
+            - `sha256sum.txt`: Checksums for file verification
+          files: release_assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
