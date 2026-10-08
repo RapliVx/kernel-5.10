@@ -1,11 +1,23 @@
 name: "Kernel Build"
 
+env:
+  OUT_DIR: "out"
+
 on:
   workflow_dispatch:
+    inputs:
+      ltoType:
+        description: "Link Time Optimization (LTO)"
+        required: true
+        type: choice
+        default: "thin"
+        options:
+          - "thin"
+          - "full"
 
 jobs:
-  build:
-    name: "Build and Release Kernel"
+  build-kernel:
+    name: "Build Kernel"
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -19,44 +31,16 @@ jobs:
       - name: "Setup Build Environment"
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            aria2 \
-            bc \
-            bison \
-            build-essential \
-            cpio \
-            curl \
-            device-tree-compiler \
-            dwarves \
-            flex \
-            gcc-aarch64-linux-gnu \
-            git \
-            kmod \
-            libelf-dev \
-            libssl-dev \
-            liblz4-tool \
-            lz4 \
-            python3 \
-            python3-lxml \
-            python3-rich \
-            tar \
-            unzip \
-            zip
+          sudo apt-get install -y repo rsync aria2 build-essential bc curl flex cpio git zip dwarves libelf-dev gcc-aarch64-linux-gnu libssl-dev python3 python3-lxml python3-rich clang lld llvm llvm-dev
+          echo "BUILD_TIME=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
 
-      - name: "Download and Setup Clang Toolchain"
+      - name: "Download Clang r547379"
         run: |
+          aria2c -x 16 -s 16 -o clang.tar.gz "https://github.com/topnotchfreaks/clang/releases/download/v1.0.0/clang-r547379.tar.gz"
           mkdir -p clang
-          CLANG_URL="https://github.com/topnotchfreaks/clang/releases/download/v1.0.0/clang-r547379.tar.gz"
-          echo "Downloading Clang r547379..."
-          aria2c -x 16 -s 16 -o clang.tar.gz "$CLANG_URL" || curl -fSL --retry 3 "$CLANG_URL" -o clang.tar.gz
           tar -xzf clang.tar.gz -C clang
           rm -f clang.tar.gz
           echo "$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_PATH
-
-      - name: "Verify Compiler"
-        run: |
-          clang --version
-          ld.lld --version
 
       - name: "Build Kernel"
         run: |
@@ -79,6 +63,15 @@ jobs:
 
           echo "Configuring gki_defconfig..."
           make -j$(nproc --all) "${BUILD_ARGS[@]}" gki_defconfig
+
+          if [ "${{ github.event.inputs.ltoType }}" = "thin" ] || [ -z "${{ github.event.inputs.ltoType }}" ]; then
+            echo "Enabling ThinLTO..."
+            ./scripts/config --file out/.config -d LTO_CLANG_FULL -e LTO_CLANG_THIN
+          else
+            echo "Enabling Full LTO..."
+            ./scripts/config --file out/.config -d LTO_CLANG_THIN -e LTO_CLANG_FULL
+          fi
+          make -j$(nproc --all) "${BUILD_ARGS[@]}" olddefconfig
 
           echo "Compiling Image & modules..."
           make -j$(nproc --all) "${BUILD_ARGS[@]}" Image modules
@@ -113,26 +106,24 @@ jobs:
 
           KERNEL_VER=$(make kernelversion)
           SHORT_SHA=$(git rev-parse --short HEAD)
-          BUILD_DATE=$(date +'%Y-%m-%d')
-          TAG_NAME="${KERNEL_VER}-${BUILD_DATE}-${SHORT_SHA}"
+          TAG_NAME="${KERNEL_VER}-${BUILD_TIME}-${SHORT_SHA}"
 
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
           echo "KERNEL_VER=$KERNEL_VER" >> $GITHUB_OUTPUT
           echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_OUTPUT
-          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_OUTPUT
 
       - name: "Create GitHub Release"
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.prepare_release.outputs.TAG_NAME }}
-          name: "Kernel ${{ steps.prepare_release.outputs.KERNEL_VER }} (${{ steps.prepare_release.outputs.BUILD_DATE }})"
+          name: "Kernel ${{ steps.prepare_release.outputs.KERNEL_VER }} (${{ env.BUILD_TIME }})"
           body: |
             ### 🚀 Kernel Release Info
             - **Kernel Version:** `${{ steps.prepare_release.outputs.KERNEL_VER }}`
             - **Commit:** `${{ steps.prepare_release.outputs.SHORT_SHA }}`
-            - **Build Date:** `${{ steps.prepare_release.outputs.BUILD_DATE }}`
+            - **Build Date:** `${{ env.BUILD_TIME }}`
             - **Compiler:** Clang r547379 (LLVM)
-            - **Branch:** `${{ github.ref_name }}`
+            - **LTO:** `${{ github.event.inputs.ltoType || 'thin' }}`
 
             ### 📦 Included Files
             - `AnyKernel3-*.zip`: Flashable ZIP via Recovery (TWRP/OrangeFox) or KernelSU/APatch
