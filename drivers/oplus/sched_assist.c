@@ -35,11 +35,13 @@
 #define UX_MAGIC 0x27
 #define CMD_UX_READ  _IOR(UX_MAGIC, 0, int[2])
 #define CMD_UX_WRITE _IOW(UX_MAGIC, 1, int[3])
+#define BINDER_UX_IOCTL_SET_FLAG 0x407a6900
 
 /* Procfs directory entries */
 static struct proc_dir_entry *oplus_sched_dir;
 static struct proc_dir_entry *sched_assist_dir;
 static struct proc_dir_entry *audio_dir;
+static struct proc_dir_entry *oplus_binder_dir;
 
 /* Sched Assist state */
 static int current_scene;
@@ -937,6 +939,89 @@ static const struct proc_ops im_flag_app_proc_ops = {
 	.proc_release = single_release,
 };
 
+/* /proc/oplus_binder/ux_flag */
+static int oplus_binder_ux_flag_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "%d\n", im_flag_val);
+	return 0;
+}
+
+static int oplus_binder_ux_flag_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, oplus_binder_ux_flag_show, NULL);
+}
+
+static ssize_t oplus_binder_ux_flag_write(struct file *filp, const char __user *ubuf,
+					  size_t cnt, loff_t *ppos)
+{
+	pid_t pid = 0;
+	int val = 0;
+	int ret;
+
+	ret = parse_im_flag_input(ubuf, cnt, &pid, &val);
+	if (ret)
+		return ret;
+
+	im_flag_val = val;
+	if (pid > 0)
+		add_or_update_task(impt_tasks, &impt_lock, pid, -2, (val > 0 && val < 256));
+
+	return cnt;
+}
+
+static long proc_oplus_binder_ux_flag_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	void __user *uarg = (void __user *)arg;
+
+	if (cmd == BINDER_UX_IOCTL_SET_FLAG) {
+		int param[2];
+
+		if (copy_from_user(param, uarg, sizeof(param)))
+			return -EFAULT;
+
+		if (param[0] > 0)
+			add_or_update_task(impt_tasks, &impt_lock, param[0], -2,
+					   (param[1] > 0 && param[1] < 256));
+
+		return 0;
+	} else if (cmd == CMD_UX_WRITE) {
+		int write_ux_param[3];
+
+		if (copy_from_user(write_ux_param, uarg, sizeof(write_ux_param)))
+			return -EFAULT;
+
+		return write_task_ux(write_ux_param[0], write_ux_param[1], write_ux_param[2], true);
+	} else if (cmd == CMD_UX_READ) {
+		int read_ux_param[2];
+
+		if (copy_from_user(read_ux_param, uarg, sizeof(read_ux_param)))
+			return -EFAULT;
+
+		return read_task_ux(read_ux_param[0], read_ux_param[1], true);
+	}
+
+	return -EINVAL;
+}
+
+#ifdef CONFIG_COMPAT
+static long proc_oplus_binder_ux_flag_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	return proc_oplus_binder_ux_flag_ioctl(file, cmd, (unsigned long)(compat_ptr(arg)));
+}
+#endif
+
+static const struct proc_ops oplus_binder_ux_flag_proc_ops = {
+	.proc_open    = oplus_binder_ux_flag_open,
+	.proc_read    = seq_read,
+	.proc_write   = oplus_binder_ux_flag_write,
+	.proc_lseek   = seq_lseek,
+	.proc_release = single_release,
+	.proc_ioctl   = proc_oplus_binder_ux_flag_ioctl,
+#ifdef CONFIG_COMPAT
+	.proc_compat_ioctl = proc_oplus_binder_ux_flag_compat_ioctl,
+#endif
+};
+
 /* /proc/oplus_scheduler/sched_assist/disable_setting */
 static int disable_setting_show(struct seq_file *m, void *v)
 {
@@ -1248,6 +1333,12 @@ static int __init oplus_sched_assist_init(void)
 		proc_create("status", 0666, audio_dir, &audio_status_proc_ops);
 	}
 
+	oplus_binder_dir = proc_mkdir("oplus_binder", NULL);
+	if (oplus_binder_dir) {
+		proc_create("ux_flag", 0666, oplus_binder_dir,
+			    &oplus_binder_ux_flag_proc_ops);
+	}
+
 #ifdef CONFIG_SYSCTL
 	sched_assist_sysctl_header = register_sysctl_table(sched_assist_root_table);
 #endif
@@ -1289,6 +1380,11 @@ static void __exit oplus_sched_assist_exit(void)
 
 	if (oplus_sched_dir)
 		remove_proc_entry("oplus_scheduler", NULL);
+
+	if (oplus_binder_dir) {
+		remove_proc_entry("ux_flag", oplus_binder_dir);
+		remove_proc_entry("oplus_binder", NULL);
+	}
 }
 
 module_init(oplus_sched_assist_init);
@@ -1297,5 +1393,5 @@ module_exit(oplus_sched_assist_exit);
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("RapliVx <raffikun1203@gmail.com>");
 MODULE_DESCRIPTION("OPlus Sched Assist and UX Task Acceleration Driver");
-MODULE_VERSION("1.2.0");
+MODULE_VERSION("1.3.0");
 MODULE_ALIAS("oplus_sched_assist");
