@@ -12,6 +12,20 @@ config OPLUS_FEATURE
 
 	  If unsure, say Y.
 
+config OPLUS_HYBRIDSWAP
+	bool "OPLUS Hybridswap support"
+	depends on ZRAM && MEMCG
+	select HYBRIDSWAP
+	select HYBRIDSWAP_SWAPD
+	select HYBRIDSWAP_CORE
+	default y
+	help
+	  This option enables 100% native OPLUS Hybridswap memory expansion
+	  and management in ZRAM. When enabled, Hybridswap takes priority
+	  over Nandswap, and Nandswap is automatically disabled at runtime/init.
+
+	  If unsure, say Y.
+
 config OPLUS_NANDSWAP
 	bool "OPLUS nandswap support"
 	depends on SWAP
@@ -20,6 +34,8 @@ config OPLUS_NANDSWAP
 	  This option enables the OPlus nandswap subsystem, allowing dynamic
 	  RAM expansion (ColorOS dynamic RAM Expansion). It manages swap device
 	  routing, anonymous page eviction, and swapcache dropping.
+	  Note: If CONFIG_HYBRIDSWAP or CONFIG_OPLUS_HYBRIDSWAP is enabled,
+	  Hybridswap takes priority and Nandswap is automatically disabled.
 
 	  If unsure, say Y.
 
