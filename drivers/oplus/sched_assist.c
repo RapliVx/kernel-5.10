@@ -822,11 +822,13 @@ static int im_flag_open(struct inode *inode, struct file *file)
 	return single_open(file, im_flag_show, NULL);
 }
 
-static ssize_t im_flag_write(struct file *filp, const char __user *ubuf,
-			     size_t cnt, loff_t *ppos)
+static int parse_im_flag_input(const char __user *ubuf, size_t cnt, pid_t *out_pid, int *out_val)
 {
-	char kbuf[16];
-	int val;
+	char kbuf[64];
+	char *token, *s;
+	int val = 0;
+	pid_t pid = 0;
+	bool has_prefix = false;
 
 	if (cnt >= sizeof(kbuf))
 		return -EINVAL;
@@ -835,10 +837,57 @@ static ssize_t im_flag_write(struct file *filp, const char __user *ubuf,
 		return -EFAULT;
 	kbuf[cnt] = '\0';
 
-	if (kstrtoint(strstrip(kbuf), 0, &val))
+	s = strstrip(kbuf);
+	if (*s == 'p' || *s == 'P') {
+		has_prefix = true;
+		s++;
+		s = strstrip(s);
+	}
+
+	token = strsep(&s, " \t,");
+	if (!token || kstrtoint(token, 0, &val))
 		return -EINVAL;
 
+	if (has_prefix) {
+		/* Format: "p <pid> [flag]" */
+		pid = val;
+		val = 1;
+		if (s) {
+			token = strstrip(s);
+			if (*token && kstrtoint(token, 0, &val))
+				val = 1;
+		}
+	} else if (s && *strstrip(s)) {
+		/* Format: "<pid> <flag>" */
+		pid = val;
+		token = strstrip(s);
+		if (kstrtoint(token, 0, &val))
+			val = 1;
+	} else {
+		/* Format: "<flag>" (legacy backward compatibility) */
+		pid = 0;
+	}
+
+	*out_pid = pid;
+	*out_val = val;
+	return 0;
+}
+
+static ssize_t im_flag_write(struct file *filp, const char __user *ubuf,
+			     size_t cnt, loff_t *ppos)
+{
+	pid_t pid = 0;
+	int val = 0;
+	int ret;
+
+	ret = parse_im_flag_input(ubuf, cnt, &pid, &val);
+	if (ret)
+		return ret;
+
 	im_flag_val = val;
+	if (pid > 0)
+		add_or_update_task(impt_tasks, &impt_lock, pid, -2, (val > 0 && val < 256));
+
 	return cnt;
 }
 
@@ -865,20 +914,18 @@ static int im_flag_app_open(struct inode *inode, struct file *file)
 static ssize_t im_flag_app_write(struct file *filp, const char __user *ubuf,
 				 size_t cnt, loff_t *ppos)
 {
-	char kbuf[16];
-	int val;
+	pid_t pid = 0;
+	int val = 0;
+	int ret;
 
-	if (cnt >= sizeof(kbuf))
-		return -EINVAL;
-
-	if (copy_from_user(kbuf, ubuf, cnt))
-		return -EFAULT;
-	kbuf[cnt] = '\0';
-
-	if (kstrtoint(strstrip(kbuf), 0, &val))
-		return -EINVAL;
+	ret = parse_im_flag_input(ubuf, cnt, &pid, &val);
+	if (ret)
+		return ret;
 
 	im_flag_app_val = val;
+	if (pid > 0)
+		add_or_update_task(app_ux_tasks, &app_ux_lock, pid, -2, (val > 0 && val < 256));
+
 	return cnt;
 }
 
@@ -1250,5 +1297,5 @@ module_exit(oplus_sched_assist_exit);
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("RapliVx <raffikun1203@gmail.com>");
 MODULE_DESCRIPTION("OPlus Sched Assist and UX Task Acceleration Driver");
-MODULE_VERSION("1.1.0");
+MODULE_VERSION("1.2.0");
 MODULE_ALIAS("oplus_sched_assist");
