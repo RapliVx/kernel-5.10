@@ -68,6 +68,11 @@
  * When Hybridswap is enabled, Nandswap is kept in the codebase as a fallback
  * but deactivated to avoid conflicts and give Hybridswap 100% priority.
  */
+struct task_struct *nswapoutd = NULL;
+struct task_struct *nswapind = NULL;
+struct task_struct *nswapdropd = NULL;
+bool nandswap_enable __read_mostly = false;
+
 static int __init nandswap_init(void)
 {
 	pr_info("oplus_nandswap: Disabled because Hybridswap takes priority\n");

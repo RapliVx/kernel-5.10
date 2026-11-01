@@ -43,6 +43,10 @@ extern void putback_lru_page(struct page *page);
 
 static inline bool current_is_nswapoutd(void)
 {
+#if defined(CONFIG_HYBRIDSWAP) || defined(CONFIG_OPLUS_HYBRIDSWAP)
+	return false;
+#else
 	return current == nswapoutd;
+#endif
 }
 #endif /* _NAND_SWAP_H */
