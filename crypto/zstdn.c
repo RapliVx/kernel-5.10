@@ -370,8 +370,8 @@ static void __exit zstdn_mod_fini(void)
 subsys_initcall(zstdn_mod_init);
 module_exit(zstdn_mod_fini);
 
-MODULE_AUTHOR("Oplus Kernel Team <RapliVx@coloros>");
-MODULE_LICENSE("GPL v2");
+MODULE_AUTHOR("RapliVx <raffikun1203@gmail.com>");
+MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("OPlus Zstandard Fast Compression Algorithm (zstdn / zstdn_o)");
 MODULE_ALIAS_CRYPTO("zstdn");
 MODULE_ALIAS_CRYPTO("zstdn_o");
