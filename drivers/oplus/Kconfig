@@ -26,6 +26,20 @@ config OPLUS_HYBRIDSWAP
 
 	  If unsure, say Y.
 
+config OPLUS_ZSTDN
+	bool "OPLUS ZSTDN and ZSTDN_O fast compression support"
+	depends on ZRAM
+	select CRYPTO_ZSTDN
+	default y
+	help
+	  This option enables the native OPlus Zstandard-N (zstdn and zstdn_o)
+	  fast compression algorithms specifically designed for ColorOS ZRAM
+	  and HybridSwap. It optimizes the compression window to single 4KB page
+	  boundaries (windowLog=12) and applies negative-level match skipping
+	  to achieve near-LZ4 speed with superior Zstandard compression ratios.
+
+	  If unsure, say Y.
+
 config OPLUS_NANDSWAP
 	bool "OPLUS nandswap support"
 	depends on SWAP
