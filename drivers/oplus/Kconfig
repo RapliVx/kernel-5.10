@@ -131,4 +131,14 @@ config OPLUS_SHELL_TEMP
 
 	  If unsure, say Y.
 
+config OPLUS_CHARGER_COMPAT
+	bool "OPLUS universal fast charge and charger compatibility"
+	default y
+	help
+	  This option provides universal charger platform stubs (such as smart_charging)
+	  and intelligent input current compensation for ColorOS ported ROMs running on
+	  Linux 5.10 GKI kernels across MediaTek, Snapdragon, and universal platforms.
+
+	  If unsure, say Y.
+
 endmenu

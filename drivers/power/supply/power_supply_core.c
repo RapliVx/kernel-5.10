@@ -30,6 +30,15 @@ EXPORT_SYMBOL_GPL(power_supply_class);
 ATOMIC_NOTIFIER_HEAD(power_supply_notifier);
 EXPORT_SYMBOL_GPL(power_supply_notifier);
 
+/*
+ * Universal DCP input current floor in microamperes.
+ * Elevates clamped 1.0A input limits on wall chargers/DCP to 2.0A (10W safe floor).
+ * Default is 2000000 uA (2.0A). Set to 0 to disable.
+ */
+static int power_supply_dcp_boost_uA = 2000000;
+module_param_named(dcp_boost_uA, power_supply_dcp_boost_uA, int, 0644);
+MODULE_PARM_DESC(dcp_boost_uA, "Universal DCP fallback input current floor in uA (default 2000000 = 2.0A, 0 to disable)");
+
 static struct device_type power_supply_dev_type;
 
 struct match_device_node_array_param {
@@ -975,8 +984,36 @@ int power_supply_set_property(struct power_supply *psy,
 			    enum power_supply_property psp,
 			    const union power_supply_propval *val)
 {
+	union power_supply_propval adjusted_val;
+
 	if (atomic_read(&psy->use_cnt) <= 0 || !psy->desc->set_property)
 		return -ENODEV;
+
+	if (psp == POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT && power_supply_dcp_boost_uA > 0) {
+		/*
+		 * If input current limit is clamped between 900mA and 1500mA
+		 * and is below the target floor, check if this is NOT a PC USB port (SDP).
+		 */
+		if (val->intval >= 900000 && val->intval <= 1500000 &&
+		    val->intval < power_supply_dcp_boost_uA) {
+			bool is_sdp = false;
+			union power_supply_propval usb_type_val;
+
+			if (psy->desc->get_property &&
+			    psy->desc->get_property(psy, POWER_SUPPLY_PROP_USB_TYPE, &usb_type_val) == 0) {
+				if (usb_type_val.intval == POWER_SUPPLY_USB_TYPE_SDP)
+					is_sdp = true;
+			}
+
+			if (!is_sdp) {
+				adjusted_val = *val;
+				adjusted_val.intval = power_supply_dcp_boost_uA;
+				pr_info_ratelimited("power_supply: %s: elevating clamped input current from %d to %d uA\n",
+						    psy->desc->name, val->intval, power_supply_dcp_boost_uA);
+				val = &adjusted_val;
+			}
+		}
+	}
 
 	return psy->desc->set_property(psy, psp, val);
 }
@@ -985,8 +1022,14 @@ EXPORT_SYMBOL_GPL(power_supply_set_property);
 int power_supply_property_is_writeable(struct power_supply *psy,
 					enum power_supply_property psp)
 {
-	if (atomic_read(&psy->use_cnt) <= 0 ||
-			!psy->desc->property_is_writeable)
+	if (atomic_read(&psy->use_cnt) <= 0)
+		return -ENODEV;
+
+	if (psp == POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT ||
+	    psp == POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX)
+		return 1;
+
+	if (!psy->desc->property_is_writeable)
 		return -ENODEV;
 
 	return psy->desc->property_is_writeable(psy, psp);
