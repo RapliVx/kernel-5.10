@@ -421,6 +421,14 @@ static void reset_bdev(struct zram *zram)
 	zram->disk->fops = &zram_devops;
 	kvfree(zram->bitmap);
 	zram->bitmap = NULL;
+#ifdef CONFIG_HYBRIDSWAP_CORE
+	zram->hs_bound = false;
+#endif
+}
+
+static inline bool zram_wb_available(const struct zram *zram)
+{
+	return zram->backing_dev && zram->bitmap && !zram_is_hs_bound(zram);
 }
 
 static ssize_t backing_dev_show(struct device *dev,
@@ -432,12 +440,13 @@ static ssize_t backing_dev_show(struct device *dev,
 	ssize_t ret;
 
 	down_read(&zram->init_lock);
-	file = zram->backing_dev;
-	if (!file) {
+	/* Hide hybridswap's backing device so userspace ZramWriteback stays disabled. */
+	if (!zram_wb_available(zram)) {
 		memcpy(buf, "none\n", 5);
 		up_read(&zram->init_lock);
 		return 5;
 	}
+	file = zram->backing_dev;
 
 	p = file_path(file, buf, PAGE_SIZE - 1);
 	if (IS_ERR(p)) {
@@ -588,6 +597,9 @@ static void free_block_bdev(struct zram *zram, unsigned long blk_idx)
 {
 	int was_set;
 
+	if (WARN_ON_ONCE(!zram->bitmap))
+		return;
+
 	was_set = test_and_clear_bit(blk_idx, zram->bitmap);
 	WARN_ON_ONCE(!was_set);
 	atomic64_dec(&zram->stats.bd_count);
@@ -675,7 +687,7 @@ static ssize_t writeback_store(struct device *dev,
 		goto release_init_lock;
 	}
 
-	if (!zram->backing_dev) {
+	if (!zram_wb_available(zram)) {
 		ret = -ENODEV;
 		goto release_init_lock;
 	}

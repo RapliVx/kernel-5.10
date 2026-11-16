@@ -135,9 +135,19 @@ struct zram {
 #ifdef CONFIG_HYBRIDSWAP_CORE
 	unsigned long increase_nr_pages;
 	struct hybridswap *hs_swap;
+	bool hs_bound;
 #endif
 #ifdef CONFIG_ZRAM_MEMORY_TRACKING
 	struct dentry *debugfs_dir;
 #endif
 };
+
+static inline bool zram_is_hs_bound(const struct zram *zram)
+{
+#ifdef CONFIG_HYBRIDSWAP_CORE
+	return zram->hs_bound;
+#else
+	return false;
+#endif
+}
 #endif

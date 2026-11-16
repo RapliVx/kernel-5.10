@@ -2392,6 +2392,7 @@ int hybridswap_bind(struct zram *zram, const char *file_name)
 	zram->bdev = bdev;
 	zram->backing_dev = backing_dev;
 	zram->nr_pages = nr_pages;
+	zram->hs_bound = true;
 	return 0;
 
 out:
