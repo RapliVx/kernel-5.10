@@ -10,9 +10,11 @@
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/pagemap.h>
+#ifndef __GENKSYMS__
 #include <linux/swap.h>
 #include <linux/swapops.h>
 #include <linux/swap_cgroup.h>
+#endif
 #include <linux/tracepoint-defs.h>
 
 /*
@@ -485,6 +487,7 @@ static inline struct file *maybe_unlock_mmap_for_io(struct vm_fault *vmf,
 	return fpin;
 }
 
+#ifndef __GENKSYMS__
 /**
  * pte_next_swp_offset - Increment the swap entry offset field of a swap pte.
  * @pte: The initial pte state; is_swap_pte(pte) must be true and
@@ -549,6 +552,7 @@ static inline int swap_pte_batch(pte_t *start_ptep, int max_nr, pte_t pte)
 
 	return ptep - start_ptep;
 }
+#endif /* !__GENKSYMS__ */
 
 #else /* !CONFIG_MMU */
 static inline void clear_page_mlock(struct page *page) { }
